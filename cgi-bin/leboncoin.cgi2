@@ -1,0 +1,83 @@
+#!/usr/bin/env python
+
+import cgi
+import cgitb; cgitb.enable()  # for troubleshooting
+
+import pymongo
+
+import sys
+
+print "Content-Type: text/html\n\n"     # HTML is following
+
+
+
+settings = {
+    'MONGODB_SERVER'        : '127.0.0.1',
+    'MONGODB_PORT'          : 27017,
+    'MONGODB_DB'            : 'leboncoin',
+    'MONGODB_COLLECTION'    : 'adds',
+}
+
+    
+def printItem(item):
+    keys = ['photo','url','name','price','placement']
+    for key in keys:
+        if not key in item:
+            item[key] = ''
+        if not item[key]:
+            item[key] = ''
+    html = """<div>
+        <div style="width:auto;height:180px;float:left;margin:1px;font-size:10px;">
+            <a href="%s" alt="%s">
+                <img src="%s" />
+                <br/>
+                %s &euro; - %s
+            </a>
+        </div>
+    </div>""" % (''.join(item['url']), ''.join(item['name']), ''.join(item['photo']), item['price'], item['placement'] )
+    print html;
+
+    sys.stdout.flush()
+
+
+def main():
+    form = cgi.FieldStorage()
+    categories  = form.getlist("category")        
+    search      = form.getlist("search")
+    first       = (form.getfirst("first", ""))
+    last        = (form.getfirst("last", ""))
+
+    if not first :
+        first = 0
+    if not last :
+        last = 50
+
+
+    if "search" not in form or "category" not in form:
+        print "<H1>Error</H1>"
+        print "Please choose category + search please."
+        return
+    if not last > first:
+        print "<H1>Error</H1>"
+        print "Wrong tabs"
+        return
+
+
+    connection      = pymongo.Connection(settings['MONGODB_SERVER'], settings['MONGODB_PORT'])
+    db              = connection[settings['MONGODB_DB']]
+    collection      = db[settings['MONGODB_COLLECTION']]
+    
+    # find
+    # db.adds.find( {category: {$in: ["ameublement","decoration"]}, search: { $in: ["loft","industriel"]  }   }   )
+    # > db.adds.aggregate({$group: { _id: {search: "$search", category: "$category"}  }   })
+
+    for item in collection.find(  {"category": {"$in": categories }, "search": { "$in": search  }   }   ).sort("id",-1)[int(first):int(last)] :
+        printItem(item)
+
+
+
+
+if __name__ == '__main__':
+    main()
+
+

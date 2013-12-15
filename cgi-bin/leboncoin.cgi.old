@@ -1,0 +1,201 @@
+#!/usr/bin/env python
+
+import cgi
+import cgitb; cgitb.enable()  # for troubleshooting
+
+import sys
+
+from scrapy.contrib.loader import XPathItemLoader
+from scrapy.item import Item, Field
+from scrapy.selector import HtmlXPathSelector
+from scrapy.spider import BaseSpider
+
+
+print "Content-Type: text/html\n\n"     # HTML is following
+
+print "<TITLE>LBC parser</TITLE>"
+print ""
+#print "<html><head><title>LBC</title></head><body>"
+
+class LeboncoinItem(Item):
+    # define the fields for your item here like:
+    # name = Field()
+
+     name     = Field()
+     photo    = Field()
+     url      = Field()
+     category = Field()
+
+ 
+class LeboncoinSpider(BaseSpider):
+    name            = "leboncoin"
+    allowed_domains = ["www.leboncoin.fr"]
+    categories      = ['ameublement']
+    start_urls      = []
+    search          = 'bureau'
+    for page in range(1,2):
+        for category in categories:
+            start_urls.append('http://www.leboncoin.fr/'+category+'/offres/nord_pas_de_calais/?q='+search+'&o='+str(page))
+
+
+    def parse(self, response):
+        hxs = HtmlXPathSelector(response)
+        for qxs in hxs.select('//div[@class="list-lbc"]/a'):
+            loader = XPathItemLoader(LeboncoinItem(), selector=qxs)
+            loader.add_xpath('name'      ,  'div[@class="lbc"]/div[@class="detail"]/div[@class="title"]/text()', re='^\s*([\w\s]+\w)\s*' )
+            loader.add_xpath('photo'     ,  'div[@class="lbc"]/div[@class="image"]/div[@class="image-and-nb"]/img/@src' )
+            loader.add_xpath('url'       ,  '@href' )
+            loader.add_value('category'  ,  response.url.split("/")[-4]  )
+
+            yield loader.load_item()
+
+    def parse_details(self,response):
+        item = response.meta.get('item', None)
+        if item:
+            # populate more `item` fields
+            return item
+        else:
+            self.log('No item received for %s' % response.url,
+                level=log.WARNING)
+
+
+def printItem(item):
+    #filename = ''.join(item['category'])
+    # we don't care in fact
+    #try:
+    #    open(filename+'.html')
+    #except IOError as e:
+    #    # need to write header in file
+    # we don't care in fact
+    keys = ['photo','url','name']
+    for key in keys:
+        if not key in item:
+            item[key] = ''
+    html = '<div>\
+        <div style="width:auto;height:130px;float:left;margin:1px;">\
+            <a href="%s" alt="%s">\
+                <img src="%s" />\
+            </a>\
+        </div>\
+    </div>' % (''.join(item['url']), ''.join(item['name']), ''.join(item['photo']) )
+    print html;
+
+    sys.stdout.flush()
+
+    #open(filename+'.html', 'a').write(html)
+
+
+from scrapy.contrib.downloadermiddleware.retry import RetryMiddleware
+from scrapy.contrib.downloadermiddleware.httpproxy import HttpProxyMiddleware
+
+class RetryChangeProxyMiddleware(RetryMiddleware):
+    def _retry(self, request, reason, spider):
+        log.msg('Changing proxy')
+        tn = telnetlib.Telnet('127.0.0.1', 9050)
+        tn.read_until("Escape character is '^]'.", 2)
+        tn.write('AUTHENTICATE ""\r\n')
+        tn.read_until("250 OK", 2)
+        tn.write("signal NEWNYM\r\n")
+        tn.read_until("250 OK", 2)
+        tn.write("quit\r\n")
+        tn.close()
+        time.sleep(3)
+        log.msg('Proxy changed')
+        return RetryMiddleware._retry(self, request, reason, spider)
+ 
+# Importing base64 library because we'll need it ONLY
+#in case if the proxy we are going to use requires authentication
+import base64
+
+# Start your middleware class
+class ProxyMiddleware(object):
+  # overwrite process request
+  def process_request(self, request, spider):
+    print "middleware"
+    # Set the location of the proxy
+    request.meta['proxy'] = "http://127.0.0.1:9050"
+
+    # Use the following lines if your proxy requires authentication
+    #proxy_user_pass = "USERNAME:PASSWORD"
+    # setup basic authentication for the proxy
+    #encoded_user_pass = base64.encodestring(proxy_user_pass)
+    #request.headers['Proxy-Authorization'] = 'Basic ' + encoded_user_pass
+
+
+def main():
+
+    # check if there are parameters
+
+    form = cgi.FieldStorage()
+    #category    = form.getfirst("category", "").lower()   
+    categories  = form.getlist("category")        
+    search      = form.getfirst("search", "").lower()    
+
+    categories = ['ameublement']
+    search      = 'bureau'
+
+    if categories and search:
+        print  "Categories: " + ','.join(categories)
+        print "<br/>"
+        print  "Search: " + search
+        print "<br/>"
+
+            
+        """Setups item signal and run the spider"""
+        # set up signal to catch items scraped
+        from scrapy import signals, log
+        from scrapy.xlib.pydispatch import dispatcher
+
+        items = []
+
+        def catch_item(sender, item, **kwargs):
+            self.log("got item")
+            items.append(item)
+            print "got item"
+            printItem(item)
+
+        dispatcher.connect(catch_item, signal=signals.item_passed)
+
+        # shut off log
+        from scrapy.conf import settings
+        settings.overrides['DOWNLOADER_MIDDLEWARE'] =  {
+            'scrapy.contrib.downloadermiddleware.httpproxy.HttpProxyMiddleware': 110,
+            'leboncoin.RetryChangeProxyMiddleware': 100,
+            'leboncoin.ProxyMiddleware': 100,
+        }
+        settings.overrides['LOG_ENABLED'] = True
+        settings.overrides['LOG_LEVEL'] = 'DEBUG'
+        settings.overrides['LOG_STDOUT'] = True
+        #settings.overrides['LOG_FILE'] = 'scrapy.log'
+
+        # set up crawler
+        from scrapy.crawler import CrawlerProcess
+
+        crawler = CrawlerProcess(settings)
+        crawler.install()
+        crawler.configure()
+
+        # schedule spider
+        #Sppider = LeboncoinSpider()
+        #Sppider.get_urls(categories,search)
+        #crawler.crawl(Sppider)
+        crawler.crawl(LeboncoinSpider())
+
+
+        # start engine scrapy/twisted
+        print "STARTING ENGINE"
+        crawler.start()
+        print "ENGINE STOPPED"
+
+
+
+    else:
+        print "input"
+
+
+
+
+if __name__ == '__main__':
+    main()
+
+
